@@ -11,13 +11,14 @@ const PORT = process.env.PORT || 3000
 
 let sock = null
 let isConnected = false
+let lastQR = null
 
 async function connectWhatsApp() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_info')
 
   sock = makeWASocket({
     auth: state,
-    printQRInTerminal: true,
+    printQRInTerminal: false,
     logger: pino({ level: 'silent' })
   })
 
@@ -25,13 +26,12 @@ async function connectWhatsApp() {
 
   sock.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
     if (qr) {
-      console.log('\n📱 ESCANEA ESTE QR CON WHATSAPP:\n')
-      qrcode.generate(qr, { small: true })
+      lastQR = qr
+      console.log('QR generado - visitá /qr para verlo')
     }
 
     if (connection === 'close') {
       const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut
-      console.log('Conexión cerrada. Reconectando:', shouldReconnect)
       isConnected = false
       if (shouldReconnect) connectWhatsApp()
     }
@@ -39,6 +39,7 @@ async function connectWhatsApp() {
     if (connection === 'open') {
       console.log('✅ WhatsApp conectado correctamente')
       isConnected = true
+      lastQR = null
 
       setTimeout(async () => {
         const groups = await sock.groupFetchAllParticipating()
@@ -46,11 +47,31 @@ async function connectWhatsApp() {
         Object.values(groups).forEach(g => {
           console.log(`Nombre: ${g.subject} | ID: ${g.id}`)
         })
-        console.log('\nCopia el ID del grupo de ventas y ponelo en la variable GRUPO_ID\n')
       }, 3000)
     }
   })
 }
+
+app.get('/qr', (req, res) => {
+  if (isConnected) {
+    return res.send('<h2>✅ WhatsApp ya está conectado</h2>')
+  }
+  if (!lastQR) {
+    return res.send('<h2>⏳ Generando QR... Recargá la página en 5 segundos</h2><script>setTimeout(()=>location.reload(),5000)</script>')
+  }
+
+  const qrImageUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(lastQR)}`
+  res.send(`
+    <html>
+      <body style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;font-family:sans-serif;background:#111;color:white;">
+        <h2>📱 Escaneá este QR con WhatsApp</h2>
+        <img src="${qrImageUrl}" style="border:10px solid white;border-radius:12px;" />
+        <p>WhatsApp → Dispositivos vinculados → Vincular dispositivo</p>
+        <script>setTimeout(()=>location.reload(),30000)</script>
+      </body>
+    </html>
+  `)
+})
 
 app.post('/webhook', async (req, res) => {
   try {
@@ -85,7 +106,7 @@ app.post('/webhook', async (req, res) => {
 app.get('/', (req, res) => {
   res.json({ 
     status: isConnected ? '✅ WhatsApp conectado' : '⏳ Esperando conexión',
-    mensaje: 'Bot de WhatsApp - Calendly activo'
+    qr: isConnected ? null : 'Visitá /qr para escanear'
   })
 })
 
